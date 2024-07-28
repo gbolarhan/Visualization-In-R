@@ -1,0 +1,517 @@
+---
+title: "Analysis of Presidential Election Threads on Reddit"
+author: "Andressa de Andrade Freitas, Viktor Deak, Omogbolahan Alli, Khushi Raj Shah, Alexander Yankov"
+date: "`r Sys.Date()`"
+runtime: shiny
+output:
+  tufte::tufte_html: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(repos = c(CRAN = "https://mirror.las.iastate.edu/CRAN/"))
+install.packages("tidyverse")
+install.packages("tidytext")
+install.packages("wordcloud")
+install.packages("DT")
+install.packages("plotly")
+install.packages("textdata")
+install.packages("shiny")
+library(tidyverse)
+library(tidytext)
+library(wordcloud)
+library(DT)
+library(plotly)
+library(textdata)
+library(shiny)
+setwd("/Users/gbolahanalli/Library/Mobile Documents/com~apple~CloudDocs/Projects/R/BusinessReportsWithR/BizVizAssignment/")
+load(file = "presidentialelection_50threads.rda")
+```
+<style>
+.justified-text {
+  text-align: justify;
+}
+.dt-wrap { white-space: normal; word-wrap: break-word; }
+</style>
+
+<div class="justified-text">
+# Introduction
+The rise of social media platforms has significantly transformed the landscape of political discourse. Among these platforms, Reddit stands out due to its unique structure of subreddits and threads, fostering in-depth discussions. The influence of data analytics in elections gained widespread attention with the Cambridge Analytica scandal, which highlighted how data can be leveraged to influence voter behavior. 
+
+![Cambridge Analytica](https://i.postimg.cc/JzS1B1MH/cambridge.jpg)
+<span style="text-align:center; display:block;">Figure 1: Alamy, 2024. Source: [Alamy](https://www.alamy.com/stock-photo/cambridge-analytica-facebook.html?sortBy=relevant) </span>
+
+
+<br>This analysis focuses on presidential election threads on Reddit to <u>understand the nature of conversations, key topics, and sentiments during election periods.</u> <br><br>
+</div>
+
+
+
+# Business Goal
+<div class="justified-text">
+Our goal is to democratize the power of data analytics by making data available to any candidate, enabling a fairer and more transparent use of analytics in the election process.
+</div>
+
+# Data Preprocessing
+<div class="justified-text">
+Data preprocessing is a crucial step in our analysis. It involves collecting Reddit thread data, parsing the data into a usable format, and preparing it for further analysis. This step ensures that the data is clean, well-structured, and ready for in-depth examination. 
+
+We begin by transforming the data. The dataset threads_df is first converted into a tibble using the *as_tibble* function.
+</div>
+```{r, results='hide', echo=FALSE, warning=FALSE}
+# Tidy table: text column to unite thread's title, text, and comments
+threads_tbl <- as_tibble(threads_df) %>%
+  unite(title, text, text_comments, col = "text", sep = " ")
+
+# Tokenization: unnest_tokens removes punctuation, converts text to lower case
+threads_words <- threads_tbl %>%
+  unnest_tokens(word, text) %>%
+  # omit most rare words: keep those occurring more than 10 times
+  group_by(word) %>%
+  filter(n() > 10) %>%
+  ungroup()
+```
+
+
+# Data Cleaning
+<div class="justified-text">
+Data cleaning involves removing irrelevant information, handling missing values, and correcting any inconsistencies in the dataset. This process enhances the quality of the data, ensuring the accuracy and reliability of our analysis. Given the raw nature of social media data, this step is essential to eliminate noise and focus on meaningful content.
+</div>
+
+# Visualizing the Cleaned Data
+```{r echo=FALSE}
+# Define UI for application
+data_clean_ui <- fluidPage(
+  titlePanel("Visualizing the raw data from Reddit"),
+  tags$style(
+    HTML("
+        .clean-panel {
+          height: 800px; /* Set the desired height */
+          overflow-y: auto; /* Enable vertical scrolling */
+        }
+      ")
+  ),
+  mainPanel(
+    class = "clean-panel",
+    tabsetPanel(
+      tabPanel("Tokenize Words", DT::dataTableOutput("tokenizedWordsTable")),
+      tabPanel("Clean Stop Words", DT::dataTableOutput("cleanWordsTable")),
+      tabPanel("Word Cloud", plotOutput("wordCloudPlot")),
+      tabPanel("Most Commented Threads", plotlyOutput("topThreadsPlot"))
+    )
+  )
+)
+
+# Define server logic required to draw plots and tables
+data_clean_server <- function(input, output, session) {
+  # Tokenize the Words
+  tokenized_words <- reactive({
+    threads_tbl %>%
+      unnest_tokens(word, text) %>%
+      group_by(word) %>%
+      filter(n() > 10) %>%
+      ungroup()
+  })
+
+  output$tokenizedWordsTable <- DT::renderDataTable({
+    DT::datatable(tokenized_words(), options = list(
+      pageLength = 5,
+      scrollX = TRUE,
+      width = "100px",
+      columnDefs = list(list(
+        targets = "_all",
+        className = "dt-wrap"
+      ))
+    ))
+  })
+
+  # Clean Stop Words
+  clean_words <- reactive({
+    tokenized_words() %>%
+      filter(!word %in% stop_words$word) %>%
+      filter(!is.na(word))
+  })
+
+  output$cleanWordsTable <- DT::renderDataTable({
+    DT::datatable(clean_words(), options = list(
+      pageLength = 5,
+      scrollX = TRUE,
+      width = "100px",
+      columnDefs = list(list(
+        targets = "_all",
+        className = "dt-wrap"
+      ))
+    ))
+  })
+
+  # Frequently occurring words
+  freq_words <- reactive({
+    clean_words() %>% count(word, sort = TRUE)
+  })
+
+  output$freqWordsPlot <- renderPlotly({
+    nmin <- 100
+    data <- freq_words() %>%
+      filter(n > nmin) %>%
+      mutate(word = reorder(word, n))
+
+    p <- data %>%
+      ggplot(aes(x = word, y = n, text = paste("Word: ", word, "<br>Count: ", n))) +
+      geom_col(show.legend = FALSE) +
+      xlab(NULL) +
+      ylab("Frequency") +
+      scale_y_continuous(expand = c(0, 0)) +
+      coord_flip() +
+      theme_classic(base_size = 12) +
+      labs(title = "Word Frequency", subtitle = paste("n >", nmin)) +
+      theme(plot.title = element_text(lineheight = .8, face = "bold"))
+
+    ggplotly(p, tooltip = "text")
+  })
+
+  # Word Cloud
+  output$wordCloudPlot <- renderPlot({
+    data <- freq_words()
+    wordcloud(data$word, data$n, max.words = 50, colors = brewer.pal(3, "Dark2"), scale = c(1, 1))
+  })
+
+  # Top 10 Most Commented Threads
+  output$topThreadsPlot <- renderPlotly({
+    top_10_threads <- threads_df %>%
+      top_n(10, comments) %>% # Select top 10 entries based on 'comments'
+      select(title, comments) %>%
+      arrange(comments)
+
+    top_10_threads$title <- str_wrap(top_10_threads$title, width = 65)
+    top_10_threads$title <- factor(top_10_threads$title, levels = top_10_threads$title)
+
+    p <- ggplot(top_10_threads, aes(x = title, y = comments, text = paste("Topic: ", title, "<br>Comments: ", comments))) +
+      geom_bar(stat = "identity", fill = "#30C7F0", alpha = 0.6, width = 0.4) +
+      coord_flip() +
+      theme_bw() +
+      theme(
+        axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(angle = 0, vjust = 0.5, size = 8)
+      )
+
+    ggplotly(p, tooltip = "text")
+  })
+}
+
+# Run the application
+shinyApp(ui = data_clean_ui, server = data_clean_server)
+```
+
+## Observations from Clean Data
+<div class="justified-text">
+* The names "trump" and "biden" are among the most frequently mentioned words, indicating that discussions about these candidates are dominant in the threads. 
+* "harris" and "kamala" also appear frequently, suggesting significant discussions around Kamala Harris, likely due to her role as the Vice President.
+  
+* Words like "vote," "election," and "president" are common, reflecting the primary focus of the discussions on the election process and the presidency.
+*  The presence of "party" indicates discussions about political parties, their policies, and strategies.
+
+* The term "people" is highly mentioned, which may indicate conversations involving public opinion, voter sentiments, and discussions about the electorate.
+* "vote" being highly mentioned suggests a strong focus on voter participation and issues related to voting.
+
+* The appearance of the word "border" might point to discussions about immigration policy, a significant topic in recent elections.
+  
+* The frequency of names of candidates and terms related to the election process implies active discussions about campaign events, candidate performances, and debates.
+
+## Hot Topics:
+* Foreign Policy and Israel: Discussions on Democrats' policies towards Israel and its repercussions.
+* Voter Participation and Polls: Debate on the importance of voting and criticisms of election polls.
+* Election Analysis and Predictions: Analysis of election data and political predictions based on polls.
+* Political Predictions and Public Figures: Speculations about the political future of Kamala Harris and other public figures.
+* Voter History and Trends: Historical voter trends among millennials and swing voters.
+* Immigration Policies and Leader Visits: Discussions on immigration policies and political leaders' visits to borders.
+* Political Rhetoric and Public Opinion: Analysis of political rhetoric and its impact on public opinion.
+* Age Comparison among Candidates: Debate on the age of presidential candidates and its political implications.
+* Criticism and Double Standards: Discussions on political criticism and issues of double standards in politics.
+* Protection of Democracy and Political Ideologies: Debates on protecting democracy and different political ideologies.
+
+</div>
+
+
+
+# Insights
+<div class="justified-text">
+Based on the analysis, we will extract meaningful insights. These insights will shed light on public sentiment, dominant discussion topics, and the overall mood of the electorate during the election period. The insights will be presented in a clear and concise manner, highlighting the critical findings of our study. Our goal is to make these insights actionable for campaign managers and policymakers.
+</div>
+
+## Perform and Visualize both unigram and bigram analyses, as well as TF-IDF scoring.
+```{r warning=FALSE, echo=FALSE}
+# Load sentiment data
+afinn_words <- get_sentiments("afinn")
+
+# #This code processes a dataframe threads_df:
+threads_tbl <- as_tibble(threads_df) %>%
+  unite(title, text, text_comments, col = "text", sep = " ")
+threads_words <- threads_tbl %>%
+  unnest_tokens(word, text) %>%
+  group_by(word) %>%
+  filter(n() > 10) %>%
+  ungroup()
+threads_words_clean <- threads_words %>%
+  filter(!word %in% stop_words$word) %>%
+  filter(!is.na(word))
+threads_words_count <- threads_words_clean %>% count(word, sort = TRUE)
+
+# This code calculates the Term Frequency-Inverse Document Frequency (TF-IDF)
+# for the cleaned words:
+threads_words_tf_idf <- threads_words_clean %>%
+  count(url, word, sort = TRUE) %>%
+  bind_tf_idf(word, url, n) %>%
+  group_by(word) %>%
+  summarise(tf_idf_sum = sum(tf_idf)) %>%
+  arrange(desc(tf_idf_sum))
+
+# This code performs bigram analysis:
+threads_bigram <- threads_tbl %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  filter(
+    !word1 %in% stop_words$word,
+    !word2 %in% stop_words$word,
+    !is.na(word1)
+  ) %>%
+  count(word1, word2, sort = TRUE)
+
+# Sentiment Analysis Preparation
+threads_words_clean <- threads_words_clean %>%
+  mutate(date_time = as_datetime(timestamp)) %>%
+  mutate(
+    year = year(date_time),
+    month = month(date_time, label = TRUE),
+    day = day(date_time),
+    hour = hour(date_time),
+    wday = wday(date_time, label = TRUE)
+  )
+
+daily_sentiment <- threads_words_clean %>%
+  inner_join(afinn_words, by = "word") %>%
+  group_by(date = floor_date(date_time, "day")) %>%
+  summarize(daily_sentiment_score = sum(value, na.rm = TRUE))
+```
+
+```{r Shiny, echo=FALSE}
+# Set up the UI
+
+ui <- fluidPage(
+  fluidRow(
+    column(
+      width = 12,
+      tags$head(
+        tags$style(HTML("
+          body {
+            background-image: url('american-flag.jpg'); /* Use the image file in the www directory */
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            background-repeat: no-repeat;
+          }
+          .container-fluid {
+            background-color: rgba(255, 255, 255, 0.8); /* Semi-transparent white background for the main container */
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+          }
+          .tab-content {
+            background-color: rgba(255, 255, 255, 0.8); /* Semi-transparent white background for the tab content */
+            padding: 20px;
+            border-radius: 10px;
+          }
+          .well {
+            background-color: rgba(255, 255, 255, 0.8); /* Semi-transparent white background for sidebar panel */
+            border: none;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+          }
+          .slider {
+            background-color: rgba(255, 255, 255, 0.8); /* Semi-transparent white background for slider */
+          }
+        "))
+      )
+    ),
+    titlePanel("Reddit Text Mining on Presidential election post"),
+    sidebarLayout(
+      sidebarPanel(
+        sliderInput("scoreFilter",
+          "Filter by Score:",
+          min = 0, # set a default min value
+          max = 20, # set a default max value
+          value = c(0, 20) # set a default range
+        )
+      ),
+      column(
+        width = 12,
+        mainPanel(
+          tabsetPanel(
+            tabPanel("Word Frequency", plotlyOutput("wordFreqPlot")),
+            tabPanel("TF-IDF", plotlyOutput("tfidfPlot")),
+            tabPanel("Bigram Count", plotlyOutput("bigramPlot")),
+            tabPanel("Sentiment Analysis", plotlyOutput("sentimentPlot"))
+          )
+        )
+      )
+    )
+  )
+)
+
+# Define Server Logic
+server <- function(input, output, session) {
+  filtered_data <- reactive({
+    threads_tbl %>%
+      filter(score >= input$scoreFilter[1])
+  })
+
+  output$wordFreqPlot <- renderPlotly({
+    data <- filtered_data() %>%
+      unnest_tokens(word, text) %>%
+      filter(!word %in% stop_words$word) %>%
+      filter(!is.na(word)) %>%
+      count(word, sort = TRUE) %>%
+      filter(n > 100)
+
+    p <- data %>%
+      mutate(word = reorder(word, n)) %>%
+      ggplot(aes(word, n)) +
+      geom_col(fill = "blue", color = "black", alpha = 0.8, show.legend = FALSE) +
+      xlab(NULL) +
+      ylab("Frequency") +
+      scale_y_continuous(expand = c(0, 0)) +
+      coord_flip() +
+      theme_classic(base_size = 13) +
+      labs(
+        title = "Word Frequency",
+        subtitle = "Words with n > 100",
+        caption = "Source: Reddit Data"
+      ) +
+      theme(
+        plot.title = element_text(lineheight = .7, face = "bold", size = 16),
+        plot.subtitle = element_text(size = 14),
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        plot.caption = element_text(size = 10, face = "italic"),
+        axis.ticks = element_blank(),
+        panel.grid.major = element_line(size = 0.1, linetype = "dashed", color = "gray")
+      )
+
+    ggplotly(p)
+  })
+
+  output$tfidfPlot <- renderPlotly({
+    data <- filtered_data() %>%
+      unnest_tokens(word, text) %>%
+      filter(!word %in% stop_words$word) %>%
+      filter(!is.na(word)) %>%
+      count(url, word, sort = TRUE) %>%
+      bind_tf_idf(word, url, n) %>%
+      group_by(word) %>%
+      summarise(tf_idf_sum = sum(tf_idf)) %>%
+      arrange(desc(tf_idf_sum)) %>%
+      top_n(15, tf_idf_sum)
+
+    p <- data %>%
+      ggplot(aes(reorder(word, tf_idf_sum), tf_idf_sum)) +
+      geom_col(fill = "blue", color = "black", alpha = 0.8, show.legend = FALSE) +
+      scale_y_continuous(expand = c(0, 0)) +
+      coord_flip() +
+      labs(
+        title = "Term Frequency and Inverse Document Frequency (tf-idf)",
+        subtitle = "Top 15 Words Overall",
+        x = NULL,
+        y = "tf-idf",
+        caption = "Source: Reddit Data"
+      ) +
+      theme_classic(base_size = 14) +
+      theme(
+        plot.title = element_text(lineheight = .8, face = "bold", size = 16, hjust = 0.5),
+        plot.subtitle = element_text(size = 14, hjust = 0.5),
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        plot.caption = element_text(size = 10, face = "italic"),
+        axis.ticks = element_blank(),
+        panel.grid.major = element_line(size = 0.1, linetype = "dashed", color = "gray")
+      )
+
+    ggplotly(p)
+  })
+
+  output$bigramPlot <- renderPlotly({
+    data <- filtered_data() %>%
+      unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+      separate(bigram, c("word1", "word2"), sep = " ") %>%
+      filter(
+        !word1 %in% stop_words$word,
+        !word2 %in% stop_words$word,
+        !is.na(word1)
+      ) %>%
+      count(word1, word2, sort = TRUE) %>%
+      top_n(15, n) %>%
+      mutate(bigram = paste(word1, word2))
+
+    p <- data %>%
+      ggplot(aes(reorder(bigram, n), n)) +
+      geom_col(fill = "blue", color = "black", alpha = 0.8, show.legend = FALSE) +
+      scale_y_continuous(expand = c(0, 0)) +
+      coord_flip() +
+      labs(
+        title = "Bigram Count",
+        subtitle = "Total Counts in All Documents",
+        x = NULL,
+        y = "Count",
+        caption = "Source: Reddit Data"
+      ) +
+      theme_classic(base_size = 14) +
+      theme(
+        plot.title = element_text(lineheight = .8, face = "bold", size = 16, hjust = 0.5),
+        plot.subtitle = element_text(size = 14, hjust = 0.5),
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        plot.caption = element_text(size = 10, face = "italic"),
+        axis.ticks = element_blank(),
+        panel.grid.major = element_line(size = 0.1, linetype = "dashed", color = "gray")
+      )
+  })
+  output$sentimentPlot <- renderPlotly({
+    p_afinn <- ggplot(daily_sentiment, aes(x = date, y = daily_sentiment_score)) +
+      geom_line(color = "blue") +
+      labs(
+        title = "Daily Sentiment Score Over Time",
+        x = "Date",
+        y = "Average Sentiment Score"
+      ) +
+      theme_minimal()
+
+    ggplotly(p_afinn)
+  })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+```
+
+## Observations
+*Word Frequency* <br>
+The graph illustrates the frequency of various words in a dataset, highlighting the most commonly mentioned terms. From the graph, we can see that the term "trump" is the most frequently occurring word, followed by "people" and "biden." Other significant words include "harris," "vote," "president," "party," and "election."
+
+These results indicate that the attention is heavily focused on key political figures and upcoming electoral events. Specifically, the prominence of words like "trump," "biden," and "harris" underscores the public's interest in the presidential candidates. Additionally, terms such as "vote" and "election" shown the importance of the electoral process in the current discussions.
+
+Upon adjusting the scoring of the posts, it becomes evident that "trump," "people," and "biden" dominate the conversation, suggesting that these topics are of the highest interest to the public.
+
+*Term Frequency-Inverse Document Frequency(TF-IDF)* <br>
+The term "makeup" exhibits the highest TF-IDF value, indicating its unique significance across the dataset. Following closely are terms like "israel," "michelle," and "polls," which suggest focused discussions around geopolitical topics, individual figures, and survey data respectively.
+
+Other noteworthy terms include "2025," hinting at discussions projecting into the future, and "border," "debate," "women," "rights," and "abortion," which highlight ongoing societal and political debates. 
+
+*Biagram Count* <br>
+The most frequent bigram is "project 2025," indicating a significant focus on future initiatives or plans for the year 2025. This is followed by "kamala harris," highlighting the discussion after president Biden steps down.
+
+Other notable bigrams include "democratic party" and "republican party," reflecting the ongoing discourse around the two major political parties in the United States. The term "border czar" suggests discussions related to border control or immigration issues.
+
+*Sentiment Analysis* <br>
+The graph is showing the sum of daily sentiment score over time. We observe a significant peak in the sentiment score on July 22, which is notably higher than on other days. This peak corresponds with the announcement by the Democratic Party on July 21 that President Biden will step down from the presidential race. We can assume from this analysis and this chart that this action was well-received from the public due to the high sentiment following the news.
+
+# Conclusion
+This analysis will provide valuable information for *political analysts*, *campaign managers*, and *sociologists*. <br><br> __Additionally, the insights derived can be utilized for SEO and content creation, ensuring that campaign messages are effectively communicated and reach the intended audience.__
+
+
